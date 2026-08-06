@@ -6,9 +6,7 @@ services:
     dockerfilePath: ./Dockerfile
     dockerContext: .
     dockerCommand: python -m app.run_railway
-    preDeployCommand: alembic upgrade head
     healthCheckPath: /health
-    maxShutdownDelaySeconds: 60
     autoDeployTrigger: commit
     envVars:
       - key: ENVIRONMENT

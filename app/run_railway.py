@@ -13,6 +13,12 @@ import time
 
 def main() -> int:
     concurrency = os.getenv("CELERY_CONCURRENCY", "2")
+    # Free Render services do not support pre-deploy commands. Apply schema
+    # migrations before either process can accept requests or consume jobs.
+    subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        check=True,
+    )
     processes = [
         subprocess.Popen([
             sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
