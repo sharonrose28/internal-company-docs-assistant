@@ -16,6 +16,10 @@ class FakeAuth:
     async def login(self, payload):
         return {"access_token": "mock-jwt", "token_type": "bearer", "expires_in": 900}
 
+    async def signup(self, payload):
+        assert payload.department == "Engineering"
+        return {"access_token": "signup-jwt", "token_type": "bearer", "expires_in": 900}
+
 
 class FakeDocuments:
     def __init__(self, document=None, error=None):
@@ -64,6 +68,23 @@ async def test_login_contract_does_not_call_openai_or_database():
     assert response.json() == {
         "access_token": "mock-jwt", "token_type": "bearer", "expires_in": 900,
     }
+
+
+@pytest.mark.asyncio
+async def test_signup_creates_employee_session_contract():
+    app.dependency_overrides[auth_service] = lambda: FakeAuth()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/signup",
+            json={
+                "email": "person@example.com",
+                "password": "secret1",
+                "department": "Engineering",
+            },
+        )
+    app.dependency_overrides.clear()
+    assert response.status_code == 201
+    assert response.json()["access_token"] == "signup-jwt"
 
 
 @pytest.mark.asyncio

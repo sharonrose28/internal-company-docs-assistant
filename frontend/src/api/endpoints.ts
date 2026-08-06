@@ -3,6 +3,7 @@ import type { ChatHistoryItem, ChatResponse, ChatSession, DocumentList, Document
 
 export const authApi = {
   login: async (input: { email: string; password: string }) => (await api.post<TokenResponse>("/login", input)).data,
+  signup: async (input: { email: string; password: string; department: string }) => (await api.post<TokenResponse>("/signup", input)).data,
 };
 export const documentsApi = {
   list: async () => (await api.get<DocumentList>("/documents")).data,

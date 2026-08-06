@@ -15,6 +15,18 @@ class LoginRequest(BaseModel):
         return value
 
 
+class SignupRequest(LoginRequest):
+    department: str = Field(min_length=2, max_length=120)
+
+    @field_validator("department")
+    @classmethod
+    def normalize_department(cls, value: str) -> str:
+        normalized = " ".join(value.split())
+        if len(normalized) < 2:
+            raise ValueError("Department must contain at least 2 characters")
+        return normalized
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
