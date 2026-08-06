@@ -1,0 +1,25 @@
+{
+    admin off
+    log {
+        format json
+    }
+}
+
+{$APP_ADDRESS::80} {
+    encode gzip zstd
+
+    handle /api/* {
+        uri strip_prefix /api
+        reverse_proxy api:8000
+    }
+
+    handle /health {
+        respond 200
+    }
+
+    handle {
+        root * /app/dist
+        try_files {path} /index.html
+        file_server
+    }
+}

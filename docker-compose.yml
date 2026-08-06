@@ -1,0 +1,163 @@
+name: company-docs
+
+x-app: &app
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: company-docs-assistant:${IMAGE_TAG:-local}
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-docs}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-docs}
+    REDIS_URL: redis://redis:6379/0
+    CACHE_REDIS_URL: redis://redis:6379/1
+    QDRANT_URL: http://qdrant:6333
+    UPLOAD_DIR: /data/uploads
+  networks:
+    - backend
+  restart: unless-stopped
+  init: true
+
+x-app-dependencies: &app-dependencies
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  qdrant:
+    condition: service_healthy
+
+services:
+  migrate:
+    <<: *app
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on: *app-dependencies
+
+  api:
+    <<: *app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--no-access-log"]
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PORT:-8000}:8000"
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - edge
+      - backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  worker:
+    <<: *app
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "worker", "--loglevel=INFO", "--hostname=worker@%h", "--concurrency=${CELERY_CONCURRENCY:-2}"]
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - backend
+      - egress
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app:celery_app inspect ping -d worker@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+
+  beat:
+    <<: *app
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "beat", "--loglevel=INFO", "--schedule=/data/celerybeat/celerybeat-schedule", "--pidfile=/data/celerybeat/celerybeat.pid"]
+    volumes:
+      - celerybeat:/data/celerybeat
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /data/celerybeat/celerybeat.pid && kill -0 $$(cat /data/celerybeat/celerybeat.pid)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  flower:
+    <<: *app
+    command: ["celery", "-A", "app.workers.celery_app:celery_app", "flower", "--port=5555", "--url-prefix=flower"]
+    ports:
+      - "${FLOWER_BIND_ADDRESS:-127.0.0.1}:${FLOWER_PORT:-5555}:5555"
+    networks:
+      - edge
+      - backend
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 5555), 3).close()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  postgres:
+    image: postgres:16.4-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-docs}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-docs}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis:/data
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    volumes:
+      - qdrant:/qdrant/storage
+    networks:
+      - backend
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  uploads:
+  postgres:
+  redis:
+  qdrant:
+  celerybeat:
+
+networks:
+  edge:
+  egress:
+  backend:
+    internal: true

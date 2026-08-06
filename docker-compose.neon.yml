@@ -1,0 +1,34 @@
+x-neon-database: &neon-database
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to the Neon connection string}
+
+services:
+  postgres:
+    profiles: ["local-postgres"]
+
+  migrate:
+    environment:
+      <<: *neon-database
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+
+  api:
+    environment:
+      <<: *neon-database
+
+  worker:
+    environment:
+      <<: *neon-database
+
+  beat:
+    environment:
+      <<: *neon-database
+
+  flower:
+    environment:
+      <<: *neon-database

@@ -1,0 +1,12 @@
+.git
+.env
+.pytest_cache
+.ruff_cache
+__pycache__
+*.py[cod]
+data
+tests
+.venv
+venv
+*.log
+celerybeat-schedule*

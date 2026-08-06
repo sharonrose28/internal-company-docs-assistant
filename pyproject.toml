@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "company-docs-assistant"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.13,<2",
+  "asyncpg>=0.29,<1",
+  "celery[redis]>=5.4,<6",
+  "email-validator>=2.2,<3",
+  "emoji>=2.14,<3",
+  "fastapi>=0.115,<1",
+  "fastembed>=0.4,<1",
+  "flower>=2.0,<3",
+  "httpx>=0.27,<1",
+  "markdown-it-py>=3,<4",
+  "langchain-openai>=0.3,<2",
+  "langchain-core>=0.3,<2",
+  "pymupdf>=1.24,<2",
+  "prometheus-client>=0.21,<1",
+  "pwdlib[argon2]>=0.2,<1",
+  "pydantic-settings>=2.5,<3",
+  "pyjwt[crypto]>=2.9,<3",
+  "python-multipart>=0.0.12,<1",
+  "qdrant-client>=1.12,<2",
+  "redis>=5,<6",
+  "sqlalchemy[asyncio]>=2.0,<3",
+  "structlog>=24.4,<26",
+  "tiktoken>=0.8,<1",
+  "uvicorn[standard]>=0.30,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app", "app.*"]
+exclude = ["alembic*", "tests*"]
+
+[project.optional-dependencies]
+dev = [
+  "aiosqlite>=0.20,<1",
+  "pytest>=8,<9",
+  "pytest-asyncio>=0.24,<1",
+  "pytest-cov>=6,<7",
+  "ruff>=0.7,<1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--strict-markers --cov=app --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+branch = true
+omit = ["app/workers/tasks.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
