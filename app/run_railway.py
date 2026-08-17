@@ -11,21 +11,55 @@ import sys
 import time
 
 
+def run_migrations() -> bool:
+    """Apply migrations with retries for temporarily unavailable managed DBs."""
+    attempts = max(1, int(os.getenv("MIGRATION_MAX_ATTEMPTS", "12")))
+    delay = max(1.0, float(os.getenv("MIGRATION_RETRY_SECONDS", "5")))
+
+    for attempt in range(1, attempts + 1):
+        print(
+            f"Applying database migrations (attempt {attempt}/{attempts})...",
+            flush=True,
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            check=False,
+        )
+        if result.returncode == 0:
+            print("Database migrations completed.", flush=True)
+            return True
+        if attempt < attempts:
+            print(
+                f"Migration failed; retrying in {delay:g} seconds.",
+                flush=True,
+            )
+            time.sleep(delay)
+
+    print("Database migrations failed after all retry attempts.", flush=True)
+    return False
+
+
 def main() -> int:
     concurrency = os.getenv("CELERY_CONCURRENCY", "2")
-    # Free Render services do not support pre-deploy commands. Apply schema
-    # migrations before either process can accept requests or consume jobs.
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "upgrade", "head"],
-        check=True,
-    )
-    processes = [
-        subprocess.Popen([
-            sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
-            "worker", "--loglevel=INFO", "--hostname=worker@%h", f"--concurrency={concurrency}",
-        ]),
-        subprocess.Popen([sys.executable, "-m", "app.run_api"]),
-    ]
+    # Bind the platform-provided port immediately. Managed databases can take
+    # several seconds to become reachable during a deployment, and blocking API
+    # startup on the first migration attempt causes platform health checks to
+    # incorrectly report that no process is listening.
+    api = subprocess.Popen([sys.executable, "-m", "app.run_api"])
+    processes = [api]
+
+    if not run_migrations():
+        api.terminate()
+        try:
+            api.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            api.kill()
+        return 1
+
+    processes.append(subprocess.Popen([
+        sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
+        "worker", "--loglevel=INFO", "--hostname=worker@%h", f"--concurrency={concurrency}",
+    ]))
 
     stopping = False
 
