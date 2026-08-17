@@ -3,7 +3,6 @@ import logging
 from time import monotonic
 from uuid import UUID
 
-from fastembed import SparseTextEmbedding
 from langchain_openai import OpenAIEmbeddings
 from qdrant_client import QdrantClient, models as qmodels
 
@@ -41,7 +40,14 @@ class EmbeddingService:
             max_retries=settings.embedding_max_retries,
             request_timeout=60,
         )
-        self.sparse_embeddings = sparse_embeddings or SparseTextEmbedding(model_name="Qdrant/bm25")
+        if sparse_embeddings is None:
+            # fastembed imports ONNX Runtime and allocates a meaningful amount of
+            # memory. Keep it out of API and Celery module import paths so small
+            # containers can start before an embedding task actually needs it.
+            from fastembed import SparseTextEmbedding
+
+            sparse_embeddings = SparseTextEmbedding(model_name="Qdrant/bm25")
+        self.sparse_embeddings = sparse_embeddings
         self.qdrant = qdrant or QdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None,

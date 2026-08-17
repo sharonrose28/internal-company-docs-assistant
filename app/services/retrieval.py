@@ -2,7 +2,6 @@ import asyncio
 import logging
 from time import monotonic
 
-from fastembed import SparseTextEmbedding
 from langchain_openai import OpenAIEmbeddings
 from qdrant_client import AsyncQdrantClient, models as qmodels
 
@@ -35,7 +34,13 @@ class RetrievalService:
             max_retries=settings.embedding_max_retries,
             request_timeout=30,
         )
-        self.sparse = sparse_embeddings or SparseTextEmbedding(model_name="Qdrant/bm25")
+        if sparse_embeddings is None:
+            # Avoid loading ONNX Runtime while FastAPI imports its routers. It is
+            # only required once a retrieval request constructs this service.
+            from fastembed import SparseTextEmbedding
+
+            sparse_embeddings = SparseTextEmbedding(model_name="Qdrant/bm25")
+        self.sparse = sparse_embeddings
         self.qdrant = qdrant or AsyncQdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None,
