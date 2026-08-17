@@ -6,6 +6,7 @@ container allows the API and Celery worker to access the same uploaded files.
 
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -39,6 +40,24 @@ def run_migrations() -> bool:
     return False
 
 
+def wait_for_api(api: subprocess.Popen, timeout: float = 120) -> bool:
+    """Wait until Uvicorn binds the configured port before loading the worker."""
+    port = int(os.getenv("PORT", "8000"))
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if api.poll() is not None:
+            print(f"API exited during startup with status {api.returncode}.", flush=True)
+            return False
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                print(f"API is listening on port {port}.", flush=True)
+                return True
+        except OSError:
+            time.sleep(1)
+    print(f"API did not bind port {port} within {timeout:g} seconds.", flush=True)
+    return False
+
+
 def main() -> int:
     concurrency = os.getenv("CELERY_CONCURRENCY", "2")
     # Bind the platform-provided port immediately. Managed databases can take
@@ -56,9 +75,16 @@ def main() -> int:
             api.kill()
         return 1
 
+    if not wait_for_api(api):
+        if api.poll() is None:
+            api.terminate()
+        return 1
+
+    worker_pool = os.getenv("CELERY_POOL", "solo")
     processes.append(subprocess.Popen([
         sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
-        "worker", "--loglevel=INFO", "--hostname=worker@%h", f"--concurrency={concurrency}",
+        "worker", "--loglevel=INFO", "--hostname=worker@%h",
+        f"--pool={worker_pool}", f"--concurrency={concurrency}",
     ]))
 
     stopping = False
