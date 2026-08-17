@@ -7,10 +7,7 @@ from app.api.dependencies import CurrentUser, DocumentServiceDep, SessionDep
 from app.repositories.document import DocumentRepository
 from app.repositories.job import JobRepository
 from app.schemas.document import DocumentList, DocumentRead
-from app.workers.tasks import (
-    delete_document_file, delete_document_vectors, process_document, sync_document_permissions,
-    invalidate_document_cache,
-)
+from app.workers.celery_app import celery_app
 
 router = APIRouter(tags=["documents"])
 
@@ -27,7 +24,11 @@ async def upload(
     document = await service.upload(file, title, user)
     job = await JobRepository(session).create(document.id)
     # Enqueue after the response transaction has committed, avoiding a worker/DB race.
-    background_tasks.add_task(process_document.delay, str(document.id), str(job.id))
+    background_tasks.add_task(
+        celery_app.send_task,
+        "documents.extract",
+        args=[str(document.id), str(job.id)],
+    )
     return DocumentRead.model_validate(document)
 
 
@@ -55,10 +56,18 @@ async def delete_document(
     service: DocumentServiceDep,
 ):
     storage_key, vector_ids = await service.delete(document_id, user)
-    background_tasks.add_task(delete_document_file.delay, storage_key)
+    background_tasks.add_task(
+        celery_app.send_task,
+        "documents.delete_file",
+        args=[storage_key],
+    )
     if vector_ids:
-        background_tasks.add_task(delete_document_vectors.delay, vector_ids)
-    background_tasks.add_task(invalidate_document_cache.delay)
+        background_tasks.add_task(
+            celery_app.send_task,
+            "documents.delete_vectors",
+            args=[vector_ids],
+        )
+    background_tasks.add_task(celery_app.send_task, "documents.invalidate_cache")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -71,7 +80,11 @@ async def assign_document(
     service: DocumentServiceDep,
 ):
     await service.assign(document_id, target_user_id, user)
-    background_tasks.add_task(sync_document_permissions.delay, str(document_id))
+    background_tasks.add_task(
+        celery_app.send_task,
+        "documents.sync_permissions",
+        args=[str(document_id)],
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -84,5 +97,9 @@ async def unassign_document(
     service: DocumentServiceDep,
 ):
     await service.unassign(document_id, target_user_id, user)
-    background_tasks.add_task(sync_document_permissions.delay, str(document_id))
+    background_tasks.add_task(
+        celery_app.send_task,
+        "documents.sync_permissions",
+        args=[str(document_id)],
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
