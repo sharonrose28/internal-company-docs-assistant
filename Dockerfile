@@ -1,4 +1,14 @@
 # syntax=docker/dockerfile:1.7
+FROM node:22-alpine AS frontend-builder
+
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend ./
+ARG VITE_API_URL=""
+ENV VITE_API_URL=$VITE_API_URL
+RUN npm run build
+
 FROM python:3.12-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -32,6 +42,7 @@ COPY --from=builder /opt/huggingface /opt/huggingface
 COPY --chown=app:app app ./app
 COPY --chown=app:app alembic ./alembic
 COPY --chown=app:app alembic.ini pyproject.toml ./
+COPY --from=frontend-builder --chown=app:app /frontend/dist ./frontend-dist
 RUN mkdir -p /data/uploads /data/celerybeat && chown -R app:app /data /app /opt/tiktoken-cache /opt/huggingface
 
 USER app
@@ -39,4 +50,4 @@ EXPOSE 8000
 STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.getenv('PORT', '8000') + '/health', timeout=3)"]
-CMD ["python", "-m", "app.run_api"]
+CMD ["python", "-m", "app.run_railway"]

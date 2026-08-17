@@ -8,5 +8,8 @@ data
 tests
 .venv
 venv
+frontend/node_modules
+frontend/dist
+*.tsbuildinfo
 *.log
 celerybeat-schedule*
