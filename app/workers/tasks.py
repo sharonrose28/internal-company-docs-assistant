@@ -7,6 +7,7 @@ from uuid import UUID
 
 import structlog
 from celery import chord
+from celery.signals import worker_ready
 from qdrant_client import QdrantClient, models as qmodels
 from redis import Redis
 from sqlalchemy import delete, func, select
@@ -459,6 +460,40 @@ def finalize_document(results: list[dict], document_id: str, job_id: str) -> dic
     ))
     _invalidate_cache_generation()
     return {"document_id": document_id, "status": "ready" if succeeded else "failed"}
+
+
+async def _claim_interrupted_jobs() -> list[tuple[str, str]]:
+    async def operation(session):
+        jobs = list((await session.scalars(
+            select(IngestionJob)
+            .join(Document, Document.id == IngestionJob.document_id)
+            .where(
+                IngestionJob.status.in_([JobStatus.RUNNING, JobStatus.RETRYING]),
+                Document.status == DocumentStatus.PROCESSING,
+            )
+            .with_for_update(skip_locked=True)
+        )).all())
+        for job in jobs:
+            job.status = JobStatus.QUEUED
+            job.stage = "recovered_after_worker_restart"
+            job.error_message = None
+        return [(str(job.document_id), str(job.id)) for job in jobs]
+
+    return await _with_session(operation)
+
+
+@celery_app.task(name="documents.recover_interrupted")
+def recover_interrupted_ingestion() -> dict:
+    jobs = _run(_claim_interrupted_jobs())
+    for document_id, job_id in jobs:
+        celery_app.send_task("documents.extract", args=[document_id, job_id])
+    logger.info("interrupted_ingestion_requeued", job_count=len(jobs))
+    return {"requeued": len(jobs)}
+
+
+@worker_ready.connect
+def recover_after_worker_start(**_: object) -> None:
+    recover_interrupted_ingestion.delay()
 
 
 @celery_app.task(name="documents.delete_file", autoretry_for=(OSError,), retry_backoff=True, max_retries=3)

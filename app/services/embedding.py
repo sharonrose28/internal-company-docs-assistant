@@ -8,6 +8,7 @@ from qdrant_client import QdrantClient, models as qmodels
 
 from app.core.config import Settings
 from app.core.metrics import OPERATION_LATENCY
+from app.services.sparse import HashedSparseEncoder
 
 logger = logging.getLogger("app.embeddings")
 
@@ -41,12 +42,7 @@ class EmbeddingService:
             request_timeout=60,
         )
         if sparse_embeddings is None:
-            # fastembed imports ONNX Runtime and allocates a meaningful amount of
-            # memory. Keep it out of API and Celery module import paths so small
-            # containers can start before an embedding task actually needs it.
-            from fastembed import SparseTextEmbedding
-
-            sparse_embeddings = SparseTextEmbedding(model_name="Qdrant/bm25")
+            sparse_embeddings = HashedSparseEncoder()
         self.sparse_embeddings = sparse_embeddings
         self.qdrant = qdrant or QdrantClient(
             url=settings.qdrant_url,
@@ -92,8 +88,8 @@ class EmbeddingService:
                 vector={
                     "dense": all_vectors[item.chunk_id],
                     "bm25": qmodels.SparseVector(
-                        indices=sparse.indices.tolist(),
-                        values=sparse.values.tolist(),
+                        indices=list(sparse.indices),
+                        values=list(sparse.values),
                     ),
                 },
                 payload=item.payload,

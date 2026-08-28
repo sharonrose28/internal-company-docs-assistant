@@ -12,6 +12,7 @@ from app.repositories.document import DocumentRepository
 from app.schemas.search import SearchFilters, SearchMode, SearchResult
 from app.services.cache import CacheService
 from app.services.embedding import EmbeddingConfigurationError
+from app.services.sparse import HashedSparseEncoder
 from app.core.metrics import OPERATION_LATENCY
 
 logger = logging.getLogger("app.retrieval")
@@ -35,11 +36,7 @@ class RetrievalService:
             request_timeout=30,
         )
         if sparse_embeddings is None:
-            # Avoid loading ONNX Runtime while FastAPI imports its routers. It is
-            # only required once a retrieval request constructs this service.
-            from fastembed import SparseTextEmbedding
-
-            sparse_embeddings = SparseTextEmbedding(model_name="Qdrant/bm25")
+            sparse_embeddings = HashedSparseEncoder()
         self.sparse = sparse_embeddings
         self.qdrant = qdrant or AsyncQdrantClient(
             url=settings.qdrant_url,
@@ -187,8 +184,8 @@ class RetrievalService:
     def _sparse_query(self, query: str) -> qmodels.SparseVector:
         sparse = next(iter(self.sparse.query_embed(query)))
         return qmodels.SparseVector(
-            indices=sparse.indices.tolist(),
-            values=sparse.values.tolist(),
+            indices=list(sparse.indices),
+            values=list(sparse.values),
         )
 
     @staticmethod
