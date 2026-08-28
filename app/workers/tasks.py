@@ -10,7 +10,7 @@ from celery import chord
 from celery.signals import worker_ready
 from qdrant_client import QdrantClient, models as qmodels
 from redis import Redis
-from sqlalchemy import and_, delete, func, or_, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import aliased
 
@@ -464,27 +464,21 @@ def finalize_document(results: list[dict], document_id: str, job_id: str) -> dic
 
 async def _claim_interrupted_jobs() -> list[tuple[str, str]]:
     async def operation(session):
-        # A container can be killed after Redis delivers the task but before the
-        # task body marks it RUNNING. Those records remain QUEUED/UPLOADED and
-        # were previously invisible to recovery forever. Only reclaim queued
-        # jobs old enough that the broker had ample time to deliver them; this
-        # avoids racing a healthy worker during ordinary startup.
+        # A container can die between any two status commits, leaving mixed
+        # combinations such as RUNNING/UPLOADED or QUEUED/PROCESSING. Recover
+        # every stale, non-terminal job whose document is also non-terminal.
+        # The age guard avoids racing a task that the broker is actively
+        # delivering during normal worker startup.
         stale_queued_before = datetime.now(UTC) - timedelta(minutes=2)
         jobs = list((await session.scalars(
             select(IngestionJob)
             .join(Document, Document.id == IngestionJob.document_id)
             .where(
-                or_(
-                    and_(
-                        IngestionJob.status.in_([JobStatus.RUNNING, JobStatus.RETRYING]),
-                        Document.status == DocumentStatus.PROCESSING,
-                    ),
-                    and_(
-                        IngestionJob.status == JobStatus.QUEUED,
-                        Document.status == DocumentStatus.UPLOADED,
-                        IngestionJob.created_at < stale_queued_before,
-                    ),
-                ),
+                IngestionJob.status.in_([
+                    JobStatus.QUEUED, JobStatus.RUNNING, JobStatus.RETRYING,
+                ]),
+                Document.status.in_([DocumentStatus.UPLOADED, DocumentStatus.PROCESSING]),
+                IngestionJob.created_at < stale_queued_before,
             )
             .with_for_update(skip_locked=True)
         )).all())
