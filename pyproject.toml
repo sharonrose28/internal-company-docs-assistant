@@ -13,7 +13,6 @@ dependencies = [
   "email-validator>=2.2,<3",
   "emoji>=2.14,<3",
   "fastapi>=0.115,<1",
-  "fastembed>=0.4,<1",
   "flower>=2.0,<3",
   "httpx>=0.27,<1",
   "markdown-it-py>=3,<4",

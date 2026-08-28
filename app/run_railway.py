@@ -62,7 +62,9 @@ def main() -> int:
     # The free Northflank container has 512 MB shared by Uvicorn and Celery.
     # A single solo worker avoids duplicate task execution and keeps the
     # combined deployment below that limit.
-    concurrency = os.getenv("CELERY_CONCURRENCY", "1")
+    # This entry point deliberately co-locates API and worker; never allow a
+    # stale platform environment override to create additional worker slots.
+    concurrency = "1"
     # Bind the platform-provided port immediately. Managed databases can take
     # several seconds to become reachable during a deployment, and blocking API
     # startup on the first migration attempt causes platform health checks to
