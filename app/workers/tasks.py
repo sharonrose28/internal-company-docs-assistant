@@ -2,6 +2,7 @@ import asyncio
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from app.services.embedding import EmbeddingItem, EmbeddingService
 from app.workers.celery_app import celery_app
 
 logger = structlog.get_logger()
+_inline_ingestion_lock = Lock()
 
 
 def _invalidate_cache_generation() -> int:
@@ -349,7 +351,8 @@ def process_document(self, document_id: str, job_id: str) -> dict:
         task_id=self.request.id,
         increment_attempt=True,
     ))
-    self.update_state(state="PROGRESS", meta={"stage": "extracting", "progress": 5})
+    if not get_settings().inline_ingestion:
+        self.update_state(state="PROGRESS", meta={"stage": "extracting", "progress": 5})
     try:
         chunk_ids, stale_vector_ids = _run(_prepare_document(parsed_id))
     except Exception as exc:
@@ -372,10 +375,14 @@ def process_document(self, document_id: str, job_id: str) -> dict:
         stage="chunked",
         progress=30,
     ))
-    self.update_state(state="PROGRESS", meta={"stage": "chunked", "progress": 30})
+    if not get_settings().inline_ingestion:
+        self.update_state(state="PROGRESS", meta={"stage": "chunked", "progress": 30})
 
     batch_size = get_settings().embedding_batch_size
     batches = [chunk_ids[start:start + batch_size] for start in range(0, len(chunk_ids), batch_size)]
+    if get_settings().inline_ingestion:
+        results = [generate_embedding_batch.run(batch, job_id) for batch in batches]
+        return finalize_document.run(results, document_id, job_id)
     workflow = chord(generate_embedding_batch.s(batch, job_id) for batch in batches)
     workflow(finalize_document.s(document_id, job_id))
     return {
@@ -398,13 +405,14 @@ def generate_embedding_batch(self, chunk_ids: list[str], job_id: str) -> dict:
         vector_ids = EmbeddingService(get_settings()).embed_and_store(items)
         _run(_set_batch_success(vector_ids, checksum))
         _run(_refresh_embedding_progress(UUID(job_id)))
-        self.update_state(
-            state="PROGRESS",
-            meta={"stage": "embedding_and_qdrant", "chunk_count": len(chunk_ids)},
-        )
+        if not get_settings().inline_ingestion:
+            self.update_state(
+                state="PROGRESS",
+                meta={"stage": "embedding_and_qdrant", "chunk_count": len(chunk_ids)},
+            )
         return {"chunk_ids": chunk_ids, "ok": True, "count": len(chunk_ids)}
     except Exception as exc:
-        if self.request.retries < self.max_retries:
+        if not get_settings().inline_ingestion and self.request.retries < self.max_retries:
             countdown = min(2 ** (self.request.retries + 1), 60)
             logger.warning(
                 "embedding_batch_retry",
@@ -495,7 +503,11 @@ async def _claim_interrupted_jobs() -> list[tuple[str, str]]:
 def recover_interrupted_ingestion() -> dict:
     jobs = _run(_claim_interrupted_jobs())
     for document_id, job_id in jobs:
-        celery_app.send_task("documents.extract", args=[document_id, job_id])
+        if get_settings().inline_ingestion:
+            with _inline_ingestion_lock:
+                process_document.run(document_id, job_id)
+        else:
+            celery_app.send_task("documents.extract", args=[document_id, job_id])
     logger.info("interrupted_ingestion_requeued", job_count=len(jobs))
     return {"requeued": len(jobs)}
 
@@ -503,6 +515,17 @@ def recover_interrupted_ingestion() -> dict:
 @worker_ready.connect
 def recover_after_worker_start(**_: object) -> None:
     recover_interrupted_ingestion.delay()
+
+
+def dispatch_task(name: str, args: list[Any] | None = None) -> Any:
+    """Dispatch normally, or run sequentially in memory-constrained deployments."""
+    task_args = args or []
+    if get_settings().inline_ingestion:
+        if name == "documents.extract":
+            with _inline_ingestion_lock:
+                return celery_app.tasks[name].run(*task_args)
+        return celery_app.tasks[name].run(*task_args)
+    return celery_app.send_task(name, args=task_args)
 
 
 @celery_app.task(name="documents.delete_file", autoretry_for=(OSError,), retry_backoff=True, max_retries=3)

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     # combined API/worker deployments while retaining efficient API batching.
     embedding_batch_size: int = Field(default=16, ge=1, le=256)
     embedding_max_retries: int = Field(default=4, ge=0, le=10)
+    inline_ingestion: bool = False
     rag_model: Literal["gpt-5.6-sol"] = "gpt-5.6-sol"
     rag_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"
     rag_context_tokens: int = Field(default=6000, ge=1000, le=50000)

@@ -59,6 +59,9 @@ def wait_for_api(api: subprocess.Popen, timeout: float = 120) -> bool:
 
 
 def main() -> int:
+    # A 512 MB combined container cannot keep two Python runtimes resident.
+    # The API executes ingestion sequentially in a background thread instead.
+    os.environ.setdefault("INLINE_INGESTION", "true")
     # The free Northflank container has 512 MB shared by Uvicorn and Celery.
     # A single solo worker avoids duplicate task execution and keeps the
     # combined deployment below that limit.
@@ -85,13 +88,14 @@ def main() -> int:
             api.terminate()
         return 1
 
-    worker_pool = os.getenv("CELERY_POOL", "solo")
-    processes.append(subprocess.Popen([
-        sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
-        "worker", "--loglevel=INFO", "--hostname=worker@%h",
-        f"--pool={worker_pool}", f"--concurrency={concurrency}",
-        "--without-gossip", "--without-mingle", "--without-heartbeat",
-    ]))
+    if os.getenv("INLINE_INGESTION", "").lower() not in {"1", "true", "yes"}:
+        worker_pool = os.getenv("CELERY_POOL", "solo")
+        processes.append(subprocess.Popen([
+            sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
+            "worker", "--loglevel=INFO", "--hostname=worker@%h",
+            f"--pool={worker_pool}", f"--concurrency={concurrency}",
+            "--without-gossip", "--without-mingle", "--without-heartbeat",
+        ]))
 
     stopping = False
 

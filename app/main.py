@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,7 +21,18 @@ async def lifespan(_: FastAPI):
     settings = get_settings()
     configure_logging(settings.log_level)
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
+    recovery_task = None
+    if settings.inline_ingestion:
+        async def recover_after_migrations() -> None:
+            # run_railway applies migrations after Uvicorn binds its port.
+            await asyncio.sleep(30)
+            from app.workers.tasks import recover_interrupted_ingestion
+            await asyncio.to_thread(recover_interrupted_ingestion.run)
+
+        recovery_task = asyncio.create_task(recover_after_migrations())
     yield
+    if recovery_task and not recovery_task.done():
+        recovery_task.cancel()
     await engine.dispose()
 
 
