@@ -1,4 +1,6 @@
 import asyncio
+import ctypes
+import gc
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -33,6 +35,15 @@ from app.workers.celery_app import celery_app
 
 logger = structlog.get_logger()
 _inline_ingestion_lock = Lock()
+
+
+def _release_memory() -> None:
+    """Return completed ingestion allocations to the 512 MB container."""
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        pass
 
 
 def _invalidate_cache_generation() -> int:
@@ -367,6 +378,8 @@ def process_document(self, document_id: str, job_id: str) -> dict:
         logger.exception("document_parsing_failed", document_id=document_id)
         return {"document_id": document_id, "status": "failed", "error": str(exc)}
 
+    _release_memory()
+
     if stale_vector_ids:
         delete_document_vectors(stale_vector_ids)
     _run(_update_job(
@@ -400,9 +413,11 @@ def process_document(self, document_id: str, job_id: str) -> dict:
 )
 def generate_embedding_batch(self, chunk_ids: list[str], job_id: str) -> dict:
     parsed_ids = [UUID(chunk_id) for chunk_id in chunk_ids]
+    service = None
     try:
         items, checksum = _run(_load_embedding_items(parsed_ids))
-        vector_ids = EmbeddingService(get_settings()).embed_and_store(items)
+        service = EmbeddingService(get_settings())
+        vector_ids = service.embed_and_store(items)
         _run(_set_batch_success(vector_ids, checksum))
         _run(_refresh_embedding_progress(UUID(job_id)))
         if not get_settings().inline_ingestion:
@@ -438,6 +453,12 @@ def generate_embedding_batch(self, chunk_ids: list[str], job_id: str) -> dict:
             error_type=type(exc).__name__,
         )
         return {"chunk_ids": chunk_ids, "ok": False, "error": str(exc)}
+    finally:
+        if service is not None:
+            close = getattr(service.qdrant, "close", None)
+            if close:
+                close()
+        _release_memory()
 
 
 @celery_app.task(
