@@ -89,6 +89,27 @@ async def _prepare_document(document_id: UUID) -> tuple[list[str], list[str]]:
             raise ValueError(f"Document {document_id} does not exist")
         document.status = DocumentStatus.PROCESSING
         document.error_message = None
+        existing_chunks = list((await session.scalars(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_id == document.id)
+            .order_by(DocumentChunk.chunk_index)
+        )).all())
+        if existing_chunks:
+            # An interrupted low-memory deployment may already have committed
+            # some vectors. Preserve that work and resume only unfinished
+            # chunks instead of deleting everything and starting from zero.
+            pending_ids = [
+                str(chunk.id)
+                for chunk in existing_chunks
+                if chunk.status != ChunkStatus.EMBEDDED or not chunk.vector_id
+            ]
+            logger.info(
+                "document_ingestion_resumed",
+                document_id=str(document.id),
+                completed_chunks=len(existing_chunks) - len(pending_ids),
+                pending_chunks=len(pending_ids),
+            )
+            return pending_ids, []
         stale_vector_ids = list((await session.scalars(
             select(DocumentChunk.vector_id).where(
                 DocumentChunk.document_id == document.id,
