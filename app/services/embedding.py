@@ -51,6 +51,17 @@ class EmbeddingService:
         )
         self._indexes_ensured = False
 
+    def close(self) -> None:
+        """Release HTTP connection pools held by the provider clients."""
+        close = getattr(self.qdrant, "close", None)
+        if close:
+            close()
+        resource = getattr(self.embeddings, "client", None)
+        openai_client = getattr(resource, "_client", None)
+        close = getattr(openai_client, "close", None)
+        if close:
+            close()
+
     def embed_and_store(self, items: list[EmbeddingItem]) -> dict[UUID, str]:
         if not items:
             return {}

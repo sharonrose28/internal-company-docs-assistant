@@ -394,8 +394,18 @@ def process_document(self, document_id: str, job_id: str) -> dict:
     batch_size = get_settings().embedding_batch_size
     batches = [chunk_ids[start:start + batch_size] for start in range(0, len(chunk_ids), batch_size)]
     if get_settings().inline_ingestion:
-        results = [generate_embedding_batch.run(batch, job_id) for batch in batches]
-        return finalize_document.run(results, document_id, job_id)
+        # Reuse the provider clients for the whole document. Recreating their
+        # connection pools for every batch caused memory growth on 512 MB hosts.
+        service = EmbeddingService(get_settings())
+        try:
+            results = [
+                generate_embedding_batch.run(batch, job_id, service)
+                for batch in batches
+            ]
+            return finalize_document.run(results, document_id, job_id)
+        finally:
+            service.close()
+            _release_memory()
     workflow = chord(generate_embedding_batch.s(batch, job_id) for batch in batches)
     workflow(finalize_document.s(document_id, job_id))
     return {
@@ -411,12 +421,19 @@ def process_document(self, document_id: str, job_id: str) -> dict:
     name="documents.generate_embedding_batch",
     max_retries=get_settings().embedding_max_retries,
 )
-def generate_embedding_batch(self, chunk_ids: list[str], job_id: str) -> dict:
+def generate_embedding_batch(
+    self,
+    chunk_ids: list[str],
+    job_id: str,
+    shared_service: EmbeddingService | None = None,
+) -> dict:
     parsed_ids = [UUID(chunk_id) for chunk_id in chunk_ids]
-    service = None
+    service = shared_service
+    owns_service = shared_service is None
     try:
         items, checksum = _run(_load_embedding_items(parsed_ids))
-        service = EmbeddingService(get_settings())
+        if service is None:
+            service = EmbeddingService(get_settings())
         vector_ids = service.embed_and_store(items)
         _run(_set_batch_success(vector_ids, checksum))
         _run(_refresh_embedding_progress(UUID(job_id)))
@@ -454,10 +471,8 @@ def generate_embedding_batch(self, chunk_ids: list[str], job_id: str) -> dict:
         )
         return {"chunk_ids": chunk_ids, "ok": False, "error": str(exc)}
     finally:
-        if service is not None:
-            close = getattr(service.qdrant, "close", None)
-            if close:
-                close()
+        if owns_service and service is not None:
+            service.close()
         _release_memory()
 
 

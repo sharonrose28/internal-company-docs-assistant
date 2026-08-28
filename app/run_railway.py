@@ -62,7 +62,7 @@ def main() -> int:
     # A 512 MB combined container cannot keep two Python runtimes resident.
     # The API executes ingestion sequentially in a background thread instead.
     os.environ.setdefault("INLINE_INGESTION", "true")
-    os.environ["EMBEDDING_BATCH_SIZE"] = "8"
+    os.environ["EMBEDDING_BATCH_SIZE"] = "2"
     # The free Northflank container has 512 MB shared by Uvicorn and Celery.
     # A single solo worker avoids duplicate task execution and keeps the
     # combined deployment below that limit.
