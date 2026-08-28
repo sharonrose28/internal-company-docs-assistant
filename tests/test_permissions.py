@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.core.permissions import can_manage_document, can_read_document
+from app.core.permissions import can_delete_document, can_manage_document, can_read_document
 from app.models.user import Role
 
 
@@ -29,3 +29,12 @@ def test_employee_requires_explicit_assignment_and_cannot_manage():
     assert not can_read_document(employee, document, assigned=False)
     assert can_read_document(employee, document, assigned=True)
     assert not can_manage_document(employee, document)
+
+
+def test_employee_can_delete_only_own_upload():
+    employee = user(Role.EMPLOYEE, uuid4())
+    document = SimpleNamespace(department_id=employee.department_id, uploaded_by=employee.id)
+    assert can_delete_document(employee, document)
+
+    document.uploaded_by = uuid4()
+    assert not can_delete_document(employee, document)

@@ -18,3 +18,10 @@ def can_manage_document(user: User, document: Document) -> bool:
         and user.department_id is not None
         and user.department_id == document.department_id
     )
+
+
+def can_delete_document(user: User, document: Document) -> bool:
+    """Allow managers to administer department documents and uploaders to remove their own."""
+    return can_manage_document(user, document) or (
+        user.role == Role.EMPLOYEE and user.id == document.uploaded_by
+    )

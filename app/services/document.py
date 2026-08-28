@@ -7,7 +7,7 @@ from fastapi import UploadFile
 
 from app.core.config import Settings
 from app.core.exceptions import AppError, ForbiddenError, NotFoundError
-from app.core.permissions import can_manage_document, can_read_document
+from app.core.permissions import can_delete_document, can_manage_document, can_read_document
 from app.models.document import Document, DocumentType
 from app.models.user import Role, User
 from app.core.metrics import UPLOADS
@@ -97,8 +97,11 @@ class DocumentService:
 
     async def delete(self, document_id, user: User) -> tuple[str, list[str]]:
         document = await self.get(document_id, user)
-        if not can_manage_document(user, document):
-            raise ForbiddenError("Only administrators or the department manager may delete this document")
+        if not can_delete_document(user, document):
+            raise ForbiddenError(
+                "Only administrators, the department manager, or the employee who uploaded "
+                "the document may delete it"
+            )
         vector_ids = await self.repository.vector_ids(document.id)
         await self.repository.delete(document.id)
         return document.storage_key, vector_ids

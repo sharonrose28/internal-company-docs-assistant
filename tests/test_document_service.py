@@ -62,15 +62,29 @@ async def test_get_permission_matrix(user_factory, role, same_department, assign
 
 
 @pytest.mark.asyncio
-async def test_only_admin_or_own_department_manager_can_delete(user_factory):
+async def test_non_uploader_employee_cannot_delete(user_factory):
     department = uuid4()
     document = SimpleNamespace(id=uuid4(), department_id=department, storage_key="safe.pdf")
     repository = FakeRepository(document)
     employee = user_factory(Role.EMPLOYEE, department)
     with pytest.raises(ForbiddenError):
+        document.uploaded_by = uuid4()
         await service(repository).delete(document.id, employee)
     assert repository.deleted is None
 
     manager = user_factory(Role.MANAGER, department)
     assert await service(repository).delete(document.id, manager) == ("safe.pdf", ["vector-1"])
+    assert repository.deleted == document.id
+
+
+@pytest.mark.asyncio
+async def test_employee_can_delete_document_they_uploaded(user_factory):
+    department = uuid4()
+    employee = user_factory(Role.EMPLOYEE, department)
+    document = SimpleNamespace(
+        id=uuid4(), department_id=department, uploaded_by=employee.id, storage_key="safe.pdf"
+    )
+    repository = FakeRepository(document)
+
+    assert await service(repository).delete(document.id, employee) == ("safe.pdf", ["vector-1"])
     assert repository.deleted == document.id
