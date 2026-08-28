@@ -31,7 +31,9 @@ class Settings(BaseSettings):
     retrieval_candidate_limit: int = Field(default=30, ge=10, le=100)
     openai_api_key: SecretStr | None = None
     embedding_model: Literal["text-embedding-3-small"] = "text-embedding-3-small"
-    embedding_batch_size: int = Field(default=64, ge=1, le=256)
+    # Sixteen 1536-dimensional vectors keep peak memory bounded on 512 MB
+    # combined API/worker deployments while retaining efficient API batching.
+    embedding_batch_size: int = Field(default=16, ge=1, le=256)
     embedding_max_retries: int = Field(default=4, ge=0, le=10)
     rag_model: Literal["gpt-5.6-sol"] = "gpt-5.6-sol"
     rag_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"

@@ -59,7 +59,10 @@ def wait_for_api(api: subprocess.Popen, timeout: float = 120) -> bool:
 
 
 def main() -> int:
-    concurrency = os.getenv("CELERY_CONCURRENCY", "2")
+    # The free Northflank container has 512 MB shared by Uvicorn and Celery.
+    # A single solo worker avoids duplicate task execution and keeps the
+    # combined deployment below that limit.
+    concurrency = os.getenv("CELERY_CONCURRENCY", "1")
     # Bind the platform-provided port immediately. Managed databases can take
     # several seconds to become reachable during a deployment, and blocking API
     # startup on the first migration attempt causes platform health checks to
@@ -85,6 +88,7 @@ def main() -> int:
         sys.executable, "-m", "celery", "-A", "app.workers.celery_app:celery_app",
         "worker", "--loglevel=INFO", "--hostname=worker@%h",
         f"--pool={worker_pool}", f"--concurrency={concurrency}",
+        "--without-gossip", "--without-mingle", "--without-heartbeat",
     ]))
 
     stopping = False
