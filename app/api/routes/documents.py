@@ -23,7 +23,10 @@ async def upload(
 ) -> DocumentRead:
     document = await service.upload(file, title, user)
     job = await JobRepository(session).create(document.id)
-    # Enqueue after the response transaction has committed, avoiding a worker/DB race.
+    # Starlette runs response background tasks before FastAPI finishes generator
+    # dependency cleanup. Commit explicitly so inline ingestion can always see
+    # the document, durable source, and job rows before it starts.
+    await session.commit()
     background_tasks.add_task(
         dispatch_task,
         "documents.extract",
