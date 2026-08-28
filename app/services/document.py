@@ -68,6 +68,9 @@ class DocumentService:
             uploaded_by=user.id,
         )
         document = await self.repository.add(document)
+        # Northflank's filesystem is ephemeral. Keep a staging copy in PostgreSQL until
+        # Celery has safely extracted and embedded the document.
+        self.repository.add_source(document.id, destination.read_bytes())
         if user.role == Role.EMPLOYEE:
             await self.repository.assign(document.id, user.id, user.id)
         UPLOADS.labels(document_type.value, "accepted").inc()

@@ -23,7 +23,7 @@ from app.ingestion import (
     SlackExportParser,
 )
 from app.models.document import (
-    ChunkStatus, Document, DocumentAssignment, DocumentChunk, DocumentStatus, DocumentType,
+    ChunkStatus, Document, DocumentAssignment, DocumentChunk, DocumentSource, DocumentStatus, DocumentType,
 )
 from app.models.job import IngestionJob, JobStatus
 from app.services.embedding import EmbeddingItem, EmbeddingService
@@ -71,8 +71,14 @@ async def _prepare_document(document_id: UUID) -> tuple[list[str], list[str]]:
         await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
 
         path = (get_settings().upload_dir / Path(document.storage_key).name).resolve()
-        if path.parent != get_settings().upload_dir.resolve() or not path.is_file():
-            raise ValueError("Document storage path is invalid or missing")
+        if path.parent != get_settings().upload_dir.resolve():
+            raise ValueError("Document storage path is invalid")
+        if not path.is_file():
+            source = await session.get(DocumentSource, document.id)
+            if source is None:
+                raise ValueError("Document source is missing; upload the document again")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(source.content)
 
         if document.document_type == DocumentType.PDF:
             pages = PDFExtractor().extract(path)
@@ -439,6 +445,10 @@ def finalize_document(results: list[dict], document_id: str, job_id: str) -> dic
         if document:
             document.status = DocumentStatus.READY if succeeded else DocumentStatus.FAILED
             document.error_message = None if succeeded else "One or more chunks failed to embed"
+            if succeeded:
+                source = await session.get(DocumentSource, document.id)
+                if source:
+                    await session.delete(source)
     _run(_with_session(operation))
     _run(_update_job(
         UUID(job_id),

@@ -3,7 +3,7 @@ from uuid import UUID
 from sqlalchemy import delete, exists, false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.document import Document, DocumentAssignment, DocumentChunk
+from app.models.document import Document, DocumentAssignment, DocumentChunk, DocumentSource
 from app.models.user import Role, User
 
 
@@ -26,6 +26,9 @@ class DocumentRepository:
         self.session.add(document)
         await self.session.flush()
         return document
+
+    def add_source(self, document_id: UUID, content: bytes) -> None:
+        self.session.add(DocumentSource(document_id=document_id, content=content))
 
     async def get(self, document_id: UUID) -> Document | None:
         return await self.session.get(Document, document_id)
