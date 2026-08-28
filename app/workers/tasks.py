@@ -4,7 +4,7 @@ import gc
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 from typing import Any
 from uuid import UUID
 
@@ -35,6 +35,9 @@ from app.workers.celery_app import celery_app
 
 logger = structlog.get_logger()
 _inline_ingestion_lock = Lock()
+_async_runtime_lock = RLock()
+_async_runtime_loop: asyncio.AbstractEventLoop | None = None
+_async_runtime_factory: async_sessionmaker | None = None
 
 
 def _release_memory() -> None:
@@ -55,18 +58,28 @@ def _invalidate_cache_generation() -> int:
 
 
 def _run(coro: Awaitable[Any]) -> Any:
-    return asyncio.run(coro)
+    # Celery tasks are synchronous. Keep one event loop and one small DB pool
+    # instead of constructing several asyncpg engines per embedding batch.
+    # Repeated engine/SSL setup caused cumulative RSS growth on 512 MB hosts.
+    global _async_runtime_loop
+    with _async_runtime_lock:
+        if _async_runtime_loop is None or _async_runtime_loop.is_closed():
+            _async_runtime_loop = asyncio.new_event_loop()
+        return _async_runtime_loop.run_until_complete(coro)
 
 
 async def _with_session(operation):
-    settings = get_settings()
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with factory.begin() as session:
-            return await operation(session)
-    finally:
-        await engine.dispose()
+    global _async_runtime_factory
+    if _async_runtime_factory is None:
+        engine = create_async_engine(
+            get_settings().database_url,
+            pool_pre_ping=True,
+            pool_size=1,
+            max_overflow=0,
+        )
+        _async_runtime_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with _async_runtime_factory.begin() as session:
+        return await operation(session)
 
 
 async def _prepare_document(document_id: UUID) -> tuple[list[str], list[str]]:
