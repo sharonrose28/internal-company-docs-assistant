@@ -65,7 +65,7 @@ def main() -> int:
     os.environ["EMBEDDING_BATCH_SIZE"] = "2"
     # Bound each pass so provider clients and chunk state are released before
     # a 512 MB combined API/worker container reaches its memory limit.
-    os.environ["INLINE_INGESTION_MAX_BATCHES_PER_PASS"] = "4"
+    os.environ["INLINE_INGESTION_MAX_BATCHES_PER_PASS"] = "1"
     # The free Northflank container has 512 MB shared by Uvicorn and Celery.
     # A single solo worker avoids duplicate task execution and keeps the
     # combined deployment below that limit.
