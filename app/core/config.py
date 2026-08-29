@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     embedding_batch_size: int = Field(default=16, ge=1, le=256)
     embedding_max_retries: int = Field(default=4, ge=0, le=10)
     inline_ingestion: bool = False
+    # Zero processes the entire document in one pass. Small values let
+    # memory-constrained combined API/worker deployments yield between batches.
+    inline_ingestion_max_batches_per_pass: int = Field(default=0, ge=0, le=1000)
     rag_model: Literal["gpt-5.6-sol"] = "gpt-5.6-sol"
     rag_reasoning_effort: Literal["none", "low", "medium", "high"] = "low"
     rag_context_tokens: int = Field(default=6000, ge=1000, le=50000)

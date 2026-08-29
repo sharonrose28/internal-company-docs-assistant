@@ -384,6 +384,19 @@ async def _set_batch_failed(chunk_ids: list[UUID], error: str) -> None:
     await _with_session(operation)
 
 
+async def _pause_inline_ingestion(job_id: UUID) -> None:
+    """Persist a resumable yield without marking the document as failed."""
+    async def operation(session):
+        job = await session.get(IngestionJob, job_id, with_for_update=True)
+        if job is None:
+            raise ValueError(f"Ingestion job {job_id} does not exist")
+        job.status = JobStatus.QUEUED
+        job.stage = "embedding_paused_for_memory"
+        job.error_message = None
+
+    await _with_session(operation)
+
+
 @celery_app.task(bind=True, name="documents.extract", max_retries=0)
 def process_document(self, document_id: str, job_id: str) -> dict:
     parsed_id = UUID(document_id)
@@ -428,17 +441,36 @@ def process_document(self, document_id: str, job_id: str) -> dict:
     batch_size = get_settings().embedding_batch_size
     batches = [chunk_ids[start:start + batch_size] for start in range(0, len(chunk_ids), batch_size)]
     if get_settings().inline_ingestion:
+        settings = get_settings()
+        batch_limit = settings.inline_ingestion_max_batches_per_pass
+        selected_batches = batches[:batch_limit] if batch_limit else batches
         # Reuse the provider clients for the whole document. Recreating their
         # connection pools for every batch caused memory growth on 512 MB hosts.
-        service = EmbeddingService(get_settings())
+        service = EmbeddingService(settings) if selected_batches else None
         try:
             results = [
                 generate_embedding_batch.run(batch, job_id, service)
-                for batch in batches
+                for batch in selected_batches
             ]
+            if len(selected_batches) < len(batches):
+                _run(_pause_inline_ingestion(parsed_job_id))
+                remaining_chunks = sum(len(batch) for batch in batches[len(selected_batches):])
+                logger.info(
+                    "document_ingestion_yielded",
+                    document_id=document_id,
+                    completed_batches=len(selected_batches),
+                    remaining_chunks=remaining_chunks,
+                )
+                return {
+                    "document_id": document_id,
+                    "status": "continuing",
+                    "processed_batches": len(selected_batches),
+                    "remaining_chunks": remaining_chunks,
+                }
             return finalize_document.run(results, document_id, job_id)
         finally:
-            service.close()
+            if service is not None:
+                service.close()
             _release_memory()
     workflow = chord(generate_embedding_batch.s(batch, job_id) for batch in batches)
     workflow(finalize_document.s(document_id, job_id))
