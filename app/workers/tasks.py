@@ -547,7 +547,7 @@ async def _claim_interrupted_jobs() -> list[tuple[str, str]]:
         # every stale, non-terminal job whose document is also non-terminal.
         # The age guard avoids racing a task that the broker is actively
         # delivering during normal worker startup.
-        stale_queued_before = datetime.now(UTC) - timedelta(minutes=2)
+        stale_queued_before = datetime.now(UTC) - timedelta(minutes=1)
         jobs = list((await session.scalars(
             select(IngestionJob)
             .join(Document, Document.id == IngestionJob.document_id)
@@ -571,12 +571,16 @@ async def _claim_interrupted_jobs() -> list[tuple[str, str]]:
 
 @celery_app.task(name="documents.recover_interrupted")
 def recover_interrupted_ingestion() -> dict:
-    jobs = _run(_claim_interrupted_jobs())
-    for document_id, job_id in jobs:
-        if get_settings().inline_ingestion:
-            with _inline_ingestion_lock:
+    if get_settings().inline_ingestion:
+        # Claim only after the active ingestion releases the lock. Otherwise a
+        # periodic recovery pass could reset a legitimately long-running job.
+        with _inline_ingestion_lock:
+            jobs = _run(_claim_interrupted_jobs())
+            for document_id, job_id in jobs:
                 process_document.run(document_id, job_id)
-        else:
+    else:
+        jobs = _run(_claim_interrupted_jobs())
+        for document_id, job_id in jobs:
             celery_app.send_task("documents.extract", args=[document_id, job_id])
     logger.info("interrupted_ingestion_requeued", job_count=len(jobs))
     return {"requeued": len(jobs)}

@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,6 +16,8 @@ from app.core.logging import configure_logging
 from app.core.middleware import RequestContextMiddleware
 from app.db.session import engine
 
+logger = logging.getLogger("app.recovery")
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -27,7 +30,12 @@ async def lifespan(_: FastAPI):
             # run_railway applies migrations after Uvicorn binds its port.
             await asyncio.sleep(30)
             from app.workers.tasks import recover_interrupted_ingestion
-            await asyncio.to_thread(recover_interrupted_ingestion.run)
+            while True:
+                try:
+                    await asyncio.to_thread(recover_interrupted_ingestion.run)
+                except Exception:
+                    logger.exception("interrupted_ingestion_recovery_failed")
+                await asyncio.sleep(60)
 
         recovery_task = asyncio.create_task(recover_after_migrations())
     yield
