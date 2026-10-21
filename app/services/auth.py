@@ -20,10 +20,19 @@ class AuthService:
 
     async def login(self, request: LoginRequest) -> TokenResponse:
         user = await self.users.by_email(str(request.email))
+        password_matches = False
+        if user and user.is_active:
+            try:
+                password_matches = verify_password(request.password, user.password_hash)
+            except Exception:
+                logger.exception(
+                    "authentication_password_verify_failed",
+                    extra={"email": str(request.email), "user_id": str(user.id)},
+                )
         if (
             not user
             or not user.is_active
-            or not verify_password(request.password, user.password_hash)
+            or not password_matches
         ):
             AUTH_ATTEMPTS.labels("failure").inc()
             logger.warning("authentication_failed", extra={"email": str(request.email)})
